@@ -12,7 +12,7 @@ export class RegionalDataService {
     return data || [];
   }
 
-  // Fetch districts with their sub-districts and villages (hierarchical)
+  // Fetch districts with their sub-districts (hierarchical) - villages excluded for now
   static async getDistrictsWithHierarchy(): Promise<MhDistrictWithSubDistricts[]> {
     const { data, error } = await supabase
       .from('mh_districts')
@@ -23,18 +23,10 @@ export class RegionalDataService {
           subdistrict_name,
           district_code,
           district_name,
-          census_2011_code,
-          mh_villages(
-            village_code,
-            village_name,
-            subdistrict_code,
-            district_code
-          )
+          census_2011_code
         )
       `)
-      .order('district_name')
-      .order('mh_subdistricts(subdistrict_name)')
-      .order('mh_subdistricts(mh_villages(village_name))');
+      .order('district_name');
 
     if (error) throw error;
     return data || [];

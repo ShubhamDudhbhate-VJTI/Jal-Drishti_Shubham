@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { useDashboard } from '@/context/DashboardContext';
 import { RegionalDataService } from '@/services/regionalDataService';
-import type { MhDistrict, MhSubDistrict, MhVillage } from '@/lib/supabase';
+import type { MhDistrict, MhSubDistrict, MhVillage, MhDistrictWithSubDistricts } from '@/lib/supabase';
 
 // Fallback data for immediate functionality
 const fallbackData = {
@@ -74,7 +74,7 @@ export function RegionSidebarSupabase() {
   const [selectedVillage, setSelectedVillage] = useState<string>("");
   
   // Data from Supabase or fallback
-  const [districts, setDistricts] = useState<MhDistrict[]>([]);
+  const [districts, setDistricts] = useState<MhDistrictWithSubDistricts[]>([]);
   const [subDistricts, setSubDistricts] = useState<MhSubDistrict[]>([]);
   const [villages, setVillages] = useState<MhVillage[]>([]);
   const [searchResults, setSearchResults] = useState<MhVillage[]>([]);
@@ -90,34 +90,18 @@ export function RegionSidebarSupabase() {
   const loadDistricts = async () => {
     try {
       setIsLoading(true);
+      console.log('🔍 Loading districts from Supabase...');
       const data = await RegionalDataService.getDistrictsWithHierarchy();
+      console.log(`✅ Service returned ${data?.length || 0} districts`);
+      console.log('📋 Raw data sample:', data?.slice(0, 2));
+      
       setDistricts(data);
+      console.log('🔄 State updated, districts length:', data?.length);
       setUseFallback(false);
+      console.log('🎉 Using real Supabase data!');
     } catch (error) {
-      console.log('Using fallback data - Supabase tables not created yet');
-      // Use fallback data
-      const formattedDistricts = fallbackData.districts.map(d => ({
-        ...d,
-        id: d.district_code,
-        state_code: 27,
-        state_name: 'Maharashtra',
-        created_at: new Date().toISOString(),
-        mh_subdistricts: fallbackData.subDistricts
-          .filter(sd => sd.district_code === d.district_code)
-          .map(sd => ({
-            ...sd,
-            id: sd.subdistrict_code,
-            created_at: new Date().toISOString(),
-            mh_villages: fallbackData.villages
-              .filter(v => v.subdistrict_code === sd.subdistrict_code)
-              .map(v => ({
-                ...v,
-                id: v.village_code,
-                created_at: new Date().toISOString()
-              }))
-          }))
-      }));
-      setDistricts(formattedDistricts);
+      console.error('❌ Service error:', error.message);
+      console.log('🔄 Falling back to demo data...');
       setUseFallback(true);
     } finally {
       setIsLoading(false);
@@ -140,14 +124,27 @@ export function RegionSidebarSupabase() {
   // Load villages when sub-district changes
   useEffect(() => {
     if (selectedSubDistrict) {
-      const subDistrict = subDistricts.find(sd => sd.subdistrict_name === selectedSubDistrict);
-      if (subDistrict) {
-        setVillages(subDistrict.mh_villages || []);
-      }
+      loadVillages();
     } else {
       setVillages([]);
     }
-  }, [selectedSubDistrict, subDistricts]);
+  }, [selectedSubDistrict]);
+
+  // Load villages from Supabase
+  const loadVillages = async () => {
+    try {
+      const subDistrict = subDistricts.find(sd => sd.subdistrict_name === selectedSubDistrict);
+      if (subDistrict) {
+        console.log('🏘️ Loading villages for sub-district:', subDistrict.subdistrict_name);
+        const villageData = await RegionalDataService.getVillages(subDistrict.subdistrict_code);
+        console.log(`✅ Got ${villageData?.length || 0} villages`);
+        setVillages(villageData);
+      }
+    } catch (error) {
+      console.error('❌ Error loading villages:', error.message);
+      setVillages([]);
+    }
+  };
 
   // Search functionality
   useEffect(() => {
@@ -194,26 +191,23 @@ export function RegionSidebarSupabase() {
     setSelectedVillage("");
   };
 
-  const handleVillageChange = async (villageName: string) => {
+  // Handle village selection - update dashboard context
+  const handleVillageChange = (villageName: string) => {
     setSelectedVillage(villageName);
     
-    // Find the village with full hierarchy
-    let foundRegion = null;
-    for (const district of districts) {
-      for (const subDistrict of district.mh_subdistricts || []) {
-        const village = subDistrict.mh_villages?.find(v => v.village_name === villageName);
-        if (village) {
-          foundRegion = {
-            id: village.village_code.toString(),
-            name: village.village_name,
-            village: village.village_name,
-            subDistrict: subDistrict.subdistrict_name,
-            district: district.district_name,
-            state: 'Maharashtra'
-          };
-          break;
-        }
-      }
+    // Update dashboard context with selected region
+    if (villageName && selectedDistrict && selectedSubDistrict) {
+      const region = {
+        id: `${selectedDistrict}-${selectedSubDistrict}-${villageName}`,
+        name: villageName,
+        village: villageName,
+        subDistrict: selectedSubDistrict,
+        district: selectedDistrict,
+        state: 'Maharashtra'
+      };
+      setSelectedRegion(region);
+    }
+  };
       if (foundRegion) break;
     }
     
@@ -316,6 +310,10 @@ export function RegionSidebarSupabase() {
                 <SelectValue placeholder="Select district" />
               </SelectTrigger>
               <SelectContent>
+                {(() => {
+                  console.log('🎯 Rendering dropdown with districts:', districts.length, districts.slice(0, 3));
+                  return null;
+                })()}
                 {districts.map((district) => (
                   <SelectItem key={district.district_code} value={district.district_name}>
                     {district.district_name}

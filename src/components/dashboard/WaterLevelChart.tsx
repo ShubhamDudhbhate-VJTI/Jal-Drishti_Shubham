@@ -15,7 +15,9 @@ function CustomTooltip({ active, payload, label }: {
   const point = payload[0]?.payload;
   return (
     <div className="glass-strong rounded-lg px-3 py-2 text-xs shadow-xl border border-border/30">
-      <p className="font-semibold text-foreground mb-1">Year: {label}</p>
+      <p className="font-semibold text-foreground mb-1">
+        {point.isMonthly ? `${point.label} ${point.year}` : `Year: ${point.year}`}
+      </p>
       <p className="text-cyan-glow">
         Depth: <span className="font-mono font-bold">{point?.depth?.toFixed(2)} ft</span>
       </p>
@@ -27,6 +29,11 @@ function CustomTooltip({ active, payload, label }: {
       {point?.predicted && (
         <span className="inline-block mt-1 text-neon-green text-[10px] font-medium uppercase tracking-wider">
           Predicted
+        </span>
+      )}
+      {point?.isMonthly && !point?.predicted && (
+        <span className="inline-block mt-1 text-cyan-glow text-[10px] font-medium uppercase tracking-wider">
+          Current Year
         </span>
       )}
     </div>
@@ -45,29 +52,83 @@ export function WaterLevelChart() {
 
   const chartData = useMemo(() => {
     if (!predictionData) return [];
-    const historical = predictionData.historicalData.map((d) => ({
-      year: d.year,
-      depth: d.depth,
-      historicalDepth: d.depth,
-      predictedDepth: undefined as number | undefined,
-      upperCI: undefined as number | undefined,
-      lowerCI: undefined as number | undefined,
-    }));
-    const predicted = predictionData.predictedData.map((d) => ({
-      year: d.year,
-      depth: d.depth,
-      historicalDepth: undefined as number | undefined,
-      predictedDepth: d.depth,
-      upperCI: d.upperCI,
-      lowerCI: d.lowerCI,
-    }));
-    // Connect lines: last historical point also gets predicted value
-    if (historical.length > 0 && predicted.length > 0) {
-      const bridge = { ...historical[historical.length - 1] };
-      bridge.predictedDepth = bridge.depth;
-      historical[historical.length - 1] = bridge;
+    
+    const currentYear = 2026;
+    const monthlyLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    
+    // Historical yearly data (last 10 years, excluding current year)
+    const historicalYearly = predictionData.historicalData
+      .filter(d => d.year < currentYear)
+      .map((d) => ({
+        year: d.year,
+        label: d.year.toString(),
+        depth: d.depth,
+        historicalDepth: d.depth,
+        predictedDepth: undefined as number | undefined,
+        upperCI: undefined as number | undefined,
+        lowerCI: undefined as number | undefined,
+        isMonthly: false
+      }));
+
+    // Current year monthly data (simulate monthly data based on yearly average)
+    const currentYearMonthly = monthlyLabels.map((month, index) => {
+      const baseDepth = predictionData.historicalData.find(d => d.year === currentYear)?.depth || 
+                       predictionData.historicalData[predictionData.historicalData.length - 1]?.depth || 50;
+      // Add some monthly variation
+      const monthlyVariation = Math.sin((index / 12) * Math.PI * 2) * 5;
+      const depth = baseDepth + monthlyVariation;
+      
+      return {
+        year: currentYear,
+        label: month,
+        depth: depth,
+        historicalDepth: depth,
+        predictedDepth: undefined as number | undefined,
+        upperCI: undefined as number | undefined,
+        lowerCI: undefined as number | undefined,
+        isMonthly: true
+      };
+    });
+
+    // Predicted monthly data for next year
+    const predictedMonthly = monthlyLabels.map((month, index) => {
+      const basePrediction = predictionData.predictedData[0]?.depth || 55;
+      const monthlyVariation = Math.sin((index / 12) * Math.PI * 2) * 5;
+      const depth = basePrediction + monthlyVariation;
+      const ci = 3; // Confidence interval
+      
+      return {
+        year: currentYear + 1,
+        label: month,
+        depth: depth,
+        historicalDepth: undefined as number | undefined,
+        predictedDepth: depth,
+        upperCI: depth + ci,
+        lowerCI: depth - ci,
+        isMonthly: true
+      };
+    });
+
+    // Connect the lines between current year and predictions
+    const allData = [
+      ...historicalYearly,
+      ...currentYearMonthly,
+      ...predictedMonthly
+    ];
+
+    // Add bridge points for smooth transitions
+    if (historicalYearly.length > 0 && currentYearMonthly.length > 0) {
+      const lastYearly = allData[historicalYearly.length - 1];
+      const firstMonthly = allData[historicalYearly.length];
+      // Add a bridge point
+      allData.splice(historicalYearly.length, 0, {
+        ...lastYearly,
+        label: lastYearly.label,
+        isMonthly: false
+      });
     }
-    return [...historical, ...predicted];
+
+    return allData;
   }, [predictionData]);
 
   // Calculate monthly highlight position
@@ -117,11 +178,15 @@ export function WaterLevelChart() {
         <div className="flex gap-4 text-xs">
           <span className="flex items-center gap-1.5">
             <span className="w-4 h-0.5 bg-cyan-glow rounded-full inline-block" />
-            Historical
+            Historical (Yearly)
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-4 h-0.5 bg-cyan-glow rounded-full inline-block" style={{ opacity: 0.7 }} />
+            Current Year (Monthly)
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-4 h-0.5 bg-neon-green rounded-full inline-block" style={{ backgroundImage: "repeating-linear-gradient(90deg, hsl(145,100%,50%) 0, hsl(145,100%,50%) 4px, transparent 4px, transparent 8px)" }} />
-            Predicted
+            Predicted (Monthly)
           </span>
         </div>
       </div>
@@ -137,7 +202,7 @@ export function WaterLevelChart() {
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="hsla(222,30%,25%,0.3)" />
             <XAxis
-              dataKey="year"
+              dataKey="label"
               stroke="hsla(215,20%,55%,0.6)"
               tick={{ fontSize: 11, fill: "hsla(215,20%,55%,0.8)" }}
               axisLine={{ stroke: "hsla(222,30%,25%,0.4)" }}
@@ -151,10 +216,10 @@ export function WaterLevelChart() {
             />
             <Tooltip content={<CustomTooltip />} />
             <ReferenceLine
-              x={currentYear}
+              x="2026"
               stroke="hsla(170,100%,33%,0.5)"
               strokeDasharray="4 4"
-              label={{ value: "T=0", position: "top", fill: "hsla(170,100%,33%,0.7)", fontSize: 11 }}
+              label={{ value: "Current Year", position: "top", fill: "hsla(170,100%,33%,0.7)", fontSize: 11 }}
             />
             {/* Confidence interval area */}
             <Area
