@@ -21,7 +21,7 @@ HEADERS = {
     "Prefer": "return=representation,resolution=merge-duplicates",
 }
 
-CSV_FILE = os.path.join(os.path.dirname(__file__), "..", "\backend\Groundwater_Cleaned_Final.csv")
+CSV_FILE = os.path.join(os.path.dirname(__file__), "Groundwater_Cleaned_Final.csv")
 
 
 def parse_csv():
