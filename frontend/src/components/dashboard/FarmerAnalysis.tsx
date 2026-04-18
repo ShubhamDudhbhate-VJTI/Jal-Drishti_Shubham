@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, AlertTriangle, Droplets, TrendingUp, Calendar, MapPin, Volume2 } from 'lucide-react';
+import { CheckCircle, AlertTriangle, Droplets, TrendingUp, Calendar, MapPin, Volume2, ChevronDown, ChevronUp, Sprout } from 'lucide-react';
 import { useDashboard } from '@/context/DashboardContext';
 import { useLanguage } from '@/context/LanguageContext';
 import type { MessageKey } from '@/i18n/translations';
@@ -42,6 +42,18 @@ function buildAnalysis(regionId: string, t: (k: MessageKey) => string): FarmerAn
   return { waterLevel, trend, recommendation, actionItems };
 }
 
+const waterLevelStyles = {
+  good: { bg: 'bg-emerald-500/15', border: 'border-emerald-500/30', text: 'text-emerald-400', badge: 'bg-emerald-500', emoji: '💧' },
+  moderate: { bg: 'bg-amber-500/15', border: 'border-amber-500/30', text: 'text-amber-400', badge: 'bg-amber-500', emoji: '⚠️' },
+  critical: { bg: 'bg-red-500/15', border: 'border-red-500/30', text: 'text-red-400', badge: 'bg-red-500', emoji: '🚨' },
+};
+
+const trendStyles = {
+  improving: { badge: 'bg-emerald-500', emoji: '📈' },
+  stable: { badge: 'bg-blue-500', emoji: '➡️' },
+  declining: { badge: 'bg-red-500', emoji: '📉' },
+};
+
 export function FarmerAnalysis() {
   const { selectedRegion, selectedMonth, selectedYear } = useDashboard();
   const { t, locale } = useLanguage();
@@ -64,166 +76,116 @@ export function FarmerAnalysis() {
     speechSynthesis.speak(utterance);
   };
 
-  const getWaterLevelColor = (level: string) => {
-    switch (level) {
-      case 'good': return 'bg-green-500';
-      case 'moderate': return 'bg-yellow-500';
-      case 'critical': return 'bg-red-500';
-      default: return 'bg-gray-500';
-    }
-  };
-
-  const getWaterLevelIcon = (level: string) => {
-    switch (level) {
-      case 'good': return <CheckCircle className="h-5 w-5" />;
-      case 'moderate': return <AlertTriangle className="h-5 w-5" />;
-      case 'critical': return <AlertTriangle className="h-5 w-5" />;
-      default: return <Droplets className="h-5 w-5" />;
-    }
-  };
-
-  const getTrendIcon = (tr: string) => (
-    <TrendingUp className={`h-4 w-4 ${tr === 'declining' ? 'rotate-180 text-red-500' : 'text-green-500'}`} />
-  );
-
   const monthLabel =
     selectedMonth != null ? t(`month_${selectedMonth}` as MessageKey) : '';
 
   if (!selectedRegion || !analysis) {
     return (
-      <Card className="glass-strong border-border/30">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Droplets className="h-4 w-4" />
-            {t('farmerAnalysis')}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-center justify-center h-[200px]">
-          <p className="text-muted-foreground text-center">
+      <div className="glass rounded-xl p-6 h-full flex items-center justify-center min-h-[280px]">
+        <div className="text-center">
+          <Sprout className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="text-muted-foreground text-sm">
             {t('pleaseSelectRegion')}
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
+  const wlStyle = waterLevelStyles[analysis.waterLevel];
+  const trStyle = trendStyles[analysis.trend];
+
   return (
-    <Card className="glass-strong border-border/30">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Droplets className="h-4 w-4" />
-            {t('farmerAnalysis')}
-          </CardTitle>
+    <div className="glass rounded-xl p-5 h-full flex flex-col gap-3 overflow-y-auto">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider flex items-center gap-2">
+          <Sprout className="h-4 w-4 text-emerald-400" />
+          {t('farmerAnalysis')}
+        </h3>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="text-xs text-muted-foreground hover:text-foreground h-7 px-2"
+        >
+          {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </Button>
+      </div>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="text-xs"
-          >
-            {isExpanded ? t('expandLess') : t('expandMore')}
-          </Button>
+      {/* Status Cards */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className={`p-3 rounded-lg border ${wlStyle.border} ${wlStyle.bg} text-center`}>
+          <span className="text-lg">{wlStyle.emoji}</span>
+          <p className="text-[10px] text-muted-foreground mt-1">{t('waterLevelStatus')}</p>
+          <Badge className={`${wlStyle.badge} text-white text-xs mt-1`}>
+            {analysis.waterLevel === 'good'
+              ? t('wlGood')
+              : analysis.waterLevel === 'moderate'
+                ? t('wlModerate')
+                : t('wlCritical')}
+          </Badge>
         </div>
-      </CardHeader>
 
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-3 gap-3">
-          <div className="text-center p-3 bg-secondary/30 rounded-lg">
-            <div className="flex justify-center mb-2">
-              {getWaterLevelIcon(analysis.waterLevel)}
-            </div>
-            <p className="text-xs text-muted-foreground">{t('waterLevelStatus')}</p>
-            <Badge
-              className={`${getWaterLevelColor(analysis.waterLevel)} text-white text-xs`}
-            >
-              {analysis.waterLevel === 'good'
-                ? t('wlGood')
-                : analysis.waterLevel === 'moderate'
-                  ? t('wlModerate')
-                  : t('wlCritical')}
-            </Badge>
-          </div>
+        <div className="p-3 rounded-lg border border-border/30 bg-secondary/20 text-center">
+          <span className="text-lg">{trStyle.emoji}</span>
+          <p className="text-[10px] text-muted-foreground mt-1">{t('trendStatus')}</p>
+          <Badge className={`${trStyle.badge} text-white text-xs mt-1`}>
+            {analysis.trend === 'improving'
+              ? t('trImproving')
+              : analysis.trend === 'stable'
+                ? t('trStable')
+                : t('trDeclining')}
+          </Badge>
+        </div>
+      </div>
 
-          <div className="text-center p-3 bg-secondary/30 rounded-lg">
-            <div className="flex justify-center mb-2">
-              {getTrendIcon(analysis.trend)}
-            </div>
-            <p className="text-xs text-muted-foreground">{t('trendStatus')}</p>
-            <Badge
-              className={`${analysis.trend === 'improving' ? 'bg-green-500' :
-                analysis.trend === 'stable' ? 'bg-blue-500' : 'bg-red-500'} text-white text-xs`}
-            >
-              {analysis.trend === 'improving'
-                ? t('trImproving')
-                : analysis.trend === 'stable'
-                  ? t('trStable')
-                  : t('trDeclining')}
-            </Badge>
-          </div>
-
-          <div className="text-center p-3 bg-secondary/30 rounded-lg">
-            <Calendar className="h-5 w-5 mx-auto mb-2 text-cyan-glow" />
-            <p className="text-xs text-muted-foreground">{t('periodLabel')}</p>
-            <p className="text-sm font-bold">
-              {selectedMonth != null && selectedYear != null
-                ? `${monthLabel} ${selectedYear}`
-                : '—'}
+      {/* Recommendation */}
+      <div className="p-3 bg-gradient-to-r from-cyan-500/10 to-blue-500/5 rounded-lg border-l-3 border-l-cyan-500">
+        <div className="flex items-start gap-2">
+          <CheckCircle className="h-4 w-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-foreground leading-snug">
+              {analysis.recommendation}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              📍 {selectedRegion.name} • {selectedRegion.district}
             </p>
           </div>
         </div>
+      </div>
 
-        <div className="p-4 bg-secondary/30 rounded-lg border-l-4 border-cyan-glow">
-          <div className="flex items-start gap-3">
-            <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0 mt-1" />
-            <div>
-              <p className="text-sm font-semibold text-foreground mb-2">
-                {analysis.recommendation}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {selectedRegion.name} • {selectedRegion.district}
-              </p>
-            </div>
+      {/* Expanded Action Items */}
+      {isExpanded && (
+        <div className="p-3 bg-secondary/20 rounded-lg animate-slide-up">
+          <h4 className="text-xs font-semibold text-foreground mb-2 flex items-center gap-1.5">
+            <MapPin className="h-3.5 w-3.5 text-cyan-400" />
+            {t('actionItemsHeading')}
+          </h4>
+          <div className="space-y-1.5">
+            {analysis.actionItems.map((action, index) => (
+              <div
+                key={index}
+                className="flex items-center gap-2 p-2 bg-background/50 rounded border border-border/20 text-xs"
+              >
+                <span className="text-cyan-400 font-bold shrink-0">{index + 1}.</span>
+                <span className="text-foreground/90">{action}</span>
+              </div>
+            ))}
           </div>
         </div>
+      )}
 
-        {isExpanded && (
-          <div className="p-4 bg-secondary/30 rounded-lg">
-            <h4 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-              <MapPin className="h-4 w-4" />
-              {t('actionItemsHeading')}
-            </h4>
-
-            <div className="grid grid-cols-1 gap-2">
-              {analysis.actionItems.map((action, index) => (
-                <div
-                  key={index}
-                  className="flex items-center gap-2 p-2 bg-background/50 rounded border border-border/30"
-                >
-                  <span className="text-cyan-glow font-bold">{index + 1}.</span>
-                  <span className="text-sm">{action}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex justify-center mt-4">
-          <Button
-            onClick={() => speakAnalysis(analysis.recommendation)}
-            disabled={isSpeaking}
-            className="w-full"
-            variant="outline"
-          >
-            {isSpeaking ? (
-              <Volume2 className="h-4 w-4 animate-pulse mr-2" />
-            ) : (
-              <Volume2 className="h-4 w-4 mr-2" />
-            )}
-            {isSpeaking ? t('speaking') : t('listenAnalysis')}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      {/* Listen Button */}
+      <Button
+        onClick={() => speakAnalysis(analysis.recommendation)}
+        disabled={isSpeaking}
+        className="w-full mt-auto"
+        variant="outline"
+        size="sm"
+      >
+        <Volume2 className={`h-3.5 w-3.5 mr-1.5 ${isSpeaking ? 'animate-pulse' : ''}`} />
+        <span className="text-xs">{isSpeaking ? t('speaking') : `🔊 ${t('listenAnalysis')}`}</span>
+      </Button>
+    </div>
   );
 }

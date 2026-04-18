@@ -115,213 +115,90 @@ function interpolateMonth(month: number, anchors: { month: number; depth: number
   return anchors[anchors.length - 1].depth;
 }
 
-// Deterministic seed per village ID for fallback mock data
-function hashId(id: string): number {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
 
-function generateFallbackData(region: Region): PredictionResult {
-  const h = hashId(region.id);
-  const baseDepth = 5 + (h % 20);
-  const annualRate = ((h % 20) / 10) - 0.5;
-  const noise = 0.5 + (h % 3);
-  const currentYear = 2023;
-
-  const historicalData: WaterDataPoint[] = [];
-  for (let i = -9; i <= 0; i++) {
-    const year = currentYear + i;
-    const depth = baseDepth + annualRate * i + (Math.random() - 0.5) * noise;
-    historicalData.push({ year, depth: Math.round(depth * 100) / 100 });
-  }
-
-  const lastDepth = historicalData[historicalData.length - 1].depth;
-  const predictedData: WaterDataPoint[] = [];
-  for (let i = 1; i <= 2; i++) {
-    const year = currentYear + i;
-    const depth = lastDepth + annualRate * i + (Math.random() - 0.5) * noise * 1.2;
-    predictedData.push({
-      year,
-      depth: Math.round(depth * 100) / 100,
-      predicted: true,
-    });
-  }
-
-  const riskLevel = riskFromAnnualChange(annualRate);
-  return {
-    region,
-    historicalData,
-    predictedData,
-    rSquared: 0.75 + Math.random() * 0.2,
-    annualChangeRate: annualRate,
-    currentDepth: lastDepth,
-    riskLevel,
-    advisory: advisoryFromRisk(riskLevel, annualRate),
-    dataSource: "fallback-mock",
-  };
-}
 
 // ─── Main API Functions ─────────────────────────────────────────────────────────
 
+import { GraphDataService, type GraphDataResponse } from "@/services/graphDataService";
+
 /**
  * Fetch full region prediction data from the FastAPI backend.
- * Uses three parallel requests:
- *  1. /api/cleaned/history/{village_id}  → historicalData
- *  2. /api/predictions/{village_name}    → predictedData (seasonal → yearly aggregates)
- *  3. /api/village-risk/{village_name}   → risk stats
+ * Uses the new graph API.
  */
 export async function fetchRegionData(region: Region): Promise<PredictionResult> {
-  const villageId = region.id;
   const villageName = region.name;
-
-  console.log('fetchRegionData called for village:', villageName, 'ID:', villageId);
+  console.log("[fetchRegionData] 🔄 Starting fetch for:", villageName, region);
 
   try {
-    console.log('Making 3 parallel API calls...');
-    const [historyResp, predictionsResp, riskResp] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/cleaned/history/${encodeURIComponent(villageId)}`),
-      fetch(`${API_BASE_URL}/api/predictions/${encodeURIComponent(villageName)}`),
-      fetch(`${API_BASE_URL}/api/village-risk/${encodeURIComponent(villageName)}`),
-    ]);
+    console.log("[fetchRegionData] 📡 Calling GraphDataService.getGraphData...");
+    const graphData: GraphDataResponse = await GraphDataService.getGraphData(villageName);
+    console.log("[fetchRegionData] ✅ GraphData received:", {
+      village: graphData.village,
+      totalPoints: graphData.graph_data?.length,
+      riskAnalysis: graphData.risk_analysis,
+      metadata: graphData.metadata,
+    });
 
-    // Check API responses
-    console.log(`History API status: ${historyResp.status}`);
-    console.log(`Predictions API status: ${predictionsResp.status}`);
-    console.log(`Risk API status: ${riskResp.status}`);
-
-    // ── Historical Data ───────────────────────────────────────────────────────
-    let historicalData: WaterDataPoint[] = [];
-    if (historyResp.ok) {
-      const historyJson = await historyResp.json() as {
-        history: { year: number; avg_depth: number }[];
-      };
-      historicalData = (historyJson.history || []).map((h) => ({
-        year: h.year,
-        depth: h.avg_depth,
+    // Convert graph data to the expected format
+    const historicalData = graphData.graph_data
+      .filter(point => point.type === 'historical')
+      .map(point => ({
+        year: point.year,
+        depth: point.depth
       }));
-      console.log('Historical data loaded:', historicalData.length, 'points');
-    }
 
-    // ── Predicted Data ────────────────────────────────────────────────────────
-    // The backend returns season-level predictions (season = "jan_2024", etc.)
-    // We aggregate them per-year to get yearly predicted averages.
-    let predictedData: WaterDataPoint[] = [];
-    if (predictionsResp.ok) {
-      const predJson = await predictionsResp.json() as {
-        predictions: {
-          season: string;
-          predicted_depth: number;
-          confidence_low?: number;
-          confidence_high?: number;
-        }[];
-      };
-      const predictions = predJson.predictions || [];
-      console.log('Raw prediction response:', predJson);
-      console.log('Number of predictions:', predictions.length);
+    const predictedData = graphData.graph_data
+      .filter(point => point.type === 'prediction')
+      .map(point => ({
+        year: point.year,
+        depth: point.depth,
+        predicted: true,
+        lowerCI: point.confidence_low,
+        upperCI: point.confidence_high
+      }));
 
-      // Group predictions by year (extracted from season string like "jan_2024")
-      const yearlyMap = new Map<number, { sum: number; count: number; minCI?: number; maxCI?: number }>();
-      console.log('Processing predictions:', predictions);
-      
-      for (const pred of predictions) {
-        console.log('Processing prediction:', pred);
-        // season format: "jan_2024", "may_2025", etc.
-        const parts = pred.season.split("_");
-        const yearStr = parts[parts.length - 1];
-        const year = parseInt(yearStr, 10);
-        console.log('Extracted year:', year, 'from season:', pred.season);
-        if (isNaN(year)) {
-          console.log('Skipping invalid year for season:', pred.season);
-          continue;
-        }
+    console.log("[fetchRegionData] 📊 Parsed data:", {
+      historicalPoints: historicalData.length,
+      historicalYears: historicalData.map(d => d.year),
+      historicalDepths: historicalData.map(d => d.depth),
+      predictedPoints: predictedData.length,
+      predictedYears: predictedData.map(d => d.year),
+      predictedDepths: predictedData.map(d => d.depth),
+    });
 
-        const prev = yearlyMap.get(year) || { sum: 0, count: 0 };
-        prev.sum += Number(pred.predicted_depth);
-        prev.count += 1;
-        if (pred.confidence_low != null) {
-          prev.minCI = prev.minCI == null ? Number(pred.confidence_low) : Math.min(prev.minCI, Number(pred.confidence_low));
-        }
-        if (pred.confidence_high != null) {
-          prev.maxCI = prev.maxCI == null ? Number(pred.confidence_high) : Math.max(prev.maxCI, Number(pred.confidence_high));
-        }
-        yearlyMap.set(year, prev);
-      }
+    // Extract risk data
+    const riskLevel = (graphData.risk_analysis.risk_level?.toLowerCase() as PredictionResult["riskLevel"]) || "moderate";
+    const currentDepth = graphData.risk_analysis.avg_actual_2024 || 0;
+    const annualChangeRate = graphData.risk_analysis.avg_difference || 0;
+    const advisory = advisoryFromRisk(riskLevel, annualChangeRate);
 
-      predictedData = Array.from(yearlyMap.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([year, agg]) => ({
-          year,
-          depth: Math.round((agg.sum / Math.max(1, agg.count)) * 100) / 100,
-          predicted: true,
-          lowerCI: agg.minCI != null ? Math.round(agg.minCI * 100) / 100 : undefined,
-          upperCI: agg.maxCI != null ? Math.round(agg.maxCI * 100) / 100 : undefined,
-        }));
-      console.log('Prediction data loaded:', predictedData.length, 'points');
-    }
-
-    // ── Risk Data ─────────────────────────────────────────────────────────────
-    let riskLevel: PredictionResult["riskLevel"] = "moderate";
-    let advisory = "";
-    let currentDepth = 0;
-    let annualChangeRate = 0;
-    let rSquared = 0.8;
-
-    if (riskResp.ok) {
-      const riskJson = await riskResp.json() as {
-        risk_level?: string;
-        advisory?: string;
-        avg_predicted_depth?: number;
-        annual_change_rate?: number;
-        avg_depth_latest_year?: number;
-        r_squared?: number;
-      };
-
-      // Map backend risk levels to frontend expected values
-      const backendRisk = (riskJson.risk_level || "moderate").toLowerCase();
-      if (backendRisk === "low" || backendRisk === "safe") riskLevel = "low";
-      else if (backendRisk === "moderate" || backendRisk === "medium") riskLevel = "moderate";
-      else if (backendRisk === "high") riskLevel = "high";
-      else if (backendRisk === "severe" || backendRisk === "critical") riskLevel = "severe";
-      else riskLevel = riskFromAnnualChange(riskJson.annual_change_rate ?? 0);
-
-      annualChangeRate = riskJson.annual_change_rate ?? 0;
-      currentDepth = riskJson.avg_depth_latest_year ?? riskJson.avg_predicted_depth ?? 0;
-      advisory = riskJson.advisory || advisoryFromRisk(riskLevel, annualChangeRate);
-      rSquared = riskJson.r_squared ?? 0.8;
-    } else {
-      // Derive risk from historical + prediction data if risk endpoint fails
-      if (historicalData.length > 0) {
-        currentDepth = historicalData[historicalData.length - 1].depth;
-      }
-      if (predictedData.length > 0 && historicalData.length > 0) {
-        annualChangeRate = predictedData[0].depth - currentDepth;
-      }
-      riskLevel = riskFromAnnualChange(annualChangeRate);
-      advisory = advisoryFromRisk(riskLevel, annualChangeRate);
-    }
+    console.log("[fetchRegionData] ⚠️ Risk:", { riskLevel, currentDepth, annualChangeRate });
 
     // If we got nothing at all, fall back to mock
     if (!historicalData.length && !predictedData.length) {
+      console.warn("[fetchRegionData] ❌ No data points! Falling back to mock.");
       throw new Error("No data returned from backend");
     }
 
-    return {
+    // Compute derived stats
+    const lastDepth = historicalData.length > 0 ? historicalData[historicalData.length - 1]?.depth : currentDepth;
+
+    const result: PredictionResult = {
       region,
       historicalData,
       predictedData,
-      rSquared: Math.max(0, Math.min(1, rSquared)),
-      annualChangeRate,
-      currentDepth,
+      currentDepth: lastDepth,
       riskLevel,
       advisory,
+      rSquared: 0.8,
+      annualChangeRate,
       dataSource: "backend",
     };
+    console.log("[fetchRegionData] ✅ Final PredictionResult:", result);
+    return result;
   } catch (err) {
-    console.warn("[fetchRegionData] Backend call failed, using fallback mock:", err);
-    return generateFallbackData(region);
+    console.error("[fetchRegionData] ❌ Backend call failed:", err);
+    throw err;
   }
 }
 
@@ -342,26 +219,23 @@ export async function fetchMonthlyData(
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
     const payload = await resp.json() as {
-      predictions: {
-        season: string;
-        predicted_depth: number;
-      }[];
+      predictions: Record<string, unknown>[];
     };
 
     const predictions = payload.predictions || [];
 
-    // Build anchor points for the requested year
-    // Season format: "jan_2024"
+    // The depth field is named "predicted_2024" or "predicted_2025"
+    const depthKey = `predicted_${year}`;
+
+    // Build anchor points for the 4 seasons
     const anchors: { month: number; depth: number }[] = [];
     for (const pred of predictions) {
-      const parts = pred.season.split("_");
-      const seasonName = parts[0].toLowerCase();
-      const predYear = parseInt(parts[parts.length - 1], 10);
-      if (predYear !== year) continue;
-
+      const seasonName = (pred.season as string || "").toLowerCase();
       const anchorMonth = SEASON_MONTH_MAP[seasonName];
-      if (anchorMonth != null) {
-        anchors.push({ month: anchorMonth, depth: Number(pred.predicted_depth) });
+      const depth = pred[depthKey];
+
+      if (anchorMonth != null && depth != null) {
+        anchors.push({ month: anchorMonth, depth: Number(depth) });
       }
     }
 
@@ -388,22 +262,77 @@ export async function fetchMonthlyData(
       ],
       dataSource: "backend",
     };
-  } catch {
-    // Deterministic fallback
-    const h = hashId(villageName + year.toString() + month.toString());
-    const baseDepth = 5 + (h % 20);
-    const annualRate = ((h % 20) / 10) - 0.5;
-    const seasonalFactors = [0.8, 0.7, 0.6, 0.5, 0.4, 0.5, 0.6, 0.8, 1.0, 1.1, 1.0, 0.9];
-    const seasonalFactor = seasonalFactors[month - 1];
-    const exactDepth = baseDepth + annualRate * (year - 2024) + seasonalFactor * 2;
-    const monthlyChangeRate = annualRate / 12;
+  } catch (err) {
+    console.error(`[fetchMonthlyData] ❌ Failed for ${villageName} ${year}/${month}:`, err);
+    throw err;
+  }
+}
 
-    return {
-      exact_depth: Math.round(exactDepth * 100) / 100,
-      monthly_change_rate: Math.round(monthlyChangeRate * 1000) / 1000,
-      pointwise_insights: [`Estimated depth: ${exactDepth.toFixed(2)} m`],
-      dataSource: "fallback-mock",
+/**
+ * Fetch all 12 monthly predictions for a given year in a SINGLE API call.
+ * Previously each month triggered its own fetch — this is 12× faster.
+ *
+ * API response format:
+ *   predictions[]: { season: "Jan"|"May"|"Aug"|"Nov", predicted_2024: number, predicted_2025: number, ... }
+ */
+export async function fetchAllMonthlyForYear(
+  villageName: string,
+  year: number
+): Promise<MonthlyPredictionResult[]> {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/predictions/${encodeURIComponent(villageName)}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const payload = await resp.json() as {
+      predictions: Record<string, unknown>[];
     };
+
+    const predictions = payload.predictions || [];
+
+    // The depth field is named "predicted_2024" or "predicted_2025" depending on year
+    const depthKey = `predicted_${year}`;
+
+    // Build anchor points from the 4 seasonal predictions
+    const anchors: { month: number; depth: number }[] = [];
+    for (const pred of predictions) {
+      const seasonName = (pred.season as string || "").toLowerCase();
+      const anchorMonth = SEASON_MONTH_MAP[seasonName];
+      const depth = pred[depthKey];
+
+      if (anchorMonth != null && depth != null) {
+        anchors.push({ month: anchorMonth, depth: Number(depth) });
+      }
+    }
+
+    anchors.sort((a, b) => a.month - b.month);
+
+    if (!anchors.length) throw new Error(`No predictions for year ${year}`);
+
+    console.log(`[fetchAllMonthlyForYear] ✅ ${villageName} ${year}: ${anchors.length} anchors`, anchors);
+
+    // Interpolate all 12 months at once
+    const results: MonthlyPredictionResult[] = [];
+    for (let m = 1; m <= 12; m++) {
+      const exactDepth = interpolateMonth(m, anchors);
+      const prevDepth = interpolateMonth(m === 1 ? 12 : m - 1, anchors);
+      const monthlyChange = exactDepth - prevDepth;
+      const isExactSeason = anchors.some((a) => a.month === m);
+
+      results.push({
+        exact_depth: Math.round(exactDepth * 100) / 100,
+        monthly_change_rate: Math.round(monthlyChange * 1000) / 1000,
+        pointwise_insights: [
+          isExactSeason
+            ? `Seasonal prediction for month ${m}/${year}`
+            : `Interpolated estimate for month ${m}/${year} from seasonal anchors`,
+        ],
+        dataSource: "backend",
+      });
+    }
+    return results;
+  } catch (err) {
+    console.error(`[fetchAllMonthlyForYear] ❌ Failed for ${villageName} ${year}:`, err);
+    throw err;
   }
 }
 

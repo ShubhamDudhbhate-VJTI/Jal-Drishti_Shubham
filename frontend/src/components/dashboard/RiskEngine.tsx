@@ -1,40 +1,49 @@
 import { useDashboard } from "@/context/DashboardContext";
 import { useLanguage } from "@/context/LanguageContext";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TrendingDown, TrendingUp, Gauge, Calendar, Waves } from "lucide-react";
-
-function R2Gauge({ value, r2Label }: { value: number; r2Label: string }) {
-  const percentage = value * 100;
-  const circumference = 2 * Math.PI * 42;
-  const strokeDashoffset = circumference - (percentage / 100) * circumference;
-
-  return (
-    <div className="relative w-28 h-28 mx-auto">
-      <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
-        <circle cx="50" cy="50" r="42" fill="none" stroke="hsla(222,30%,25%,0.3)" strokeWidth="6" />
-        <circle
-          cx="50" cy="50" r="42" fill="none"
-          stroke="hsl(var(--primary))"
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={strokeDashoffset}
-          className="transition-all duration-1000 ease-out"
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-xl font-bold font-mono text-foreground">{(value).toFixed(3)}</span>
-        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">{r2Label}</span>
-      </div>
-    </div>
-  );
-}
+import { TrendingDown, TrendingUp, Gauge, Calendar, Waves, ShieldCheck, ShieldAlert, AlertTriangle, XCircle } from "lucide-react";
 
 const riskConfig = {
-  low: { color: "text-risk-low", bg: "bg-risk-low/10", border: "border-risk-low/30", labelKey: "riskLow" as const },
-  moderate: { color: "text-risk-moderate", bg: "bg-risk-moderate/10", border: "border-risk-moderate/30", labelKey: "riskModerate" as const },
-  high: { color: "text-risk-high", bg: "bg-risk-high/10", border: "border-risk-high/30", labelKey: "riskHigh" as const },
-  severe: { color: "text-risk-severe", bg: "bg-risk-severe/10", border: "border-risk-severe/30", labelKey: "riskSevere" as const },
+  low: { 
+    color: "text-emerald-400", 
+    bg: "bg-emerald-500/10", 
+    border: "border-emerald-500/30", 
+    labelKey: "riskLow" as const,
+    icon: ShieldCheck,
+    gradient: "from-emerald-500/20 to-emerald-600/5",
+    emoji: "✅",
+    desc: "Safe water levels"
+  },
+  moderate: { 
+    color: "text-amber-400", 
+    bg: "bg-amber-500/10", 
+    border: "border-amber-500/30", 
+    labelKey: "riskModerate" as const,
+    icon: AlertTriangle,
+    gradient: "from-amber-500/20 to-amber-600/5",
+    emoji: "⚠️",
+    desc: "Monitor carefully"
+  },
+  high: { 
+    color: "text-orange-400", 
+    bg: "bg-orange-500/10", 
+    border: "border-orange-500/30", 
+    labelKey: "riskHigh" as const,
+    icon: ShieldAlert,
+    gradient: "from-orange-500/20 to-orange-600/5",
+    emoji: "🔶",
+    desc: "Take precaution"
+  },
+  severe: { 
+    color: "text-red-400", 
+    bg: "bg-red-500/10", 
+    border: "border-red-500/30", 
+    labelKey: "riskSevere" as const,
+    icon: XCircle,
+    gradient: "from-red-500/20 to-red-600/5",
+    emoji: "🚨",
+    desc: "Urgent action needed"
+  },
 };
 
 export function RiskEngine() {
@@ -43,20 +52,22 @@ export function RiskEngine() {
 
   if (!selectedRegion) {
     return (
-      <div className="glass rounded-xl p-5 h-full flex items-center justify-center">
-        <p className="text-muted-foreground text-sm text-center">{t("selectRegionRiskAnalysis")}</p>
+      <div className="glass rounded-xl p-6 flex items-center justify-center h-full min-h-[200px]">
+        <div className="text-center">
+          <Gauge className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+          <p className="text-muted-foreground text-xs">{t("selectRegionRiskAnalysis")}</p>
+        </div>
       </div>
     );
   }
 
   if (isLoading || !predictionData) {
     return (
-      <div className="glass rounded-xl p-5 h-full space-y-4">
-        <Skeleton className="h-5 w-32 bg-secondary" />
-        <Skeleton className="h-28 w-28 rounded-full mx-auto bg-secondary" />
+      <div className="glass rounded-xl p-6 space-y-3">
+        <Skeleton className="h-5 w-24 bg-secondary" />
         <Skeleton className="h-16 bg-secondary/50 rounded-lg" />
-        <Skeleton className="h-16 bg-secondary/50 rounded-lg" />
-        <Skeleton className="h-16 bg-secondary/50 rounded-lg" />
+        <Skeleton className="h-12 bg-secondary/50 rounded-lg" />
+        <Skeleton className="h-12 bg-secondary/50 rounded-lg" />
       </div>
     );
   }
@@ -65,81 +76,53 @@ export function RiskEngine() {
   const riskLabel = t(risk.labelKey);
   const rate = predictionData.annualChangeRate;
   const isDecline = rate > 0;
-  const rfMeta = predictionData.rfMeta;
-  const trainedAtLabel = rfMeta?.trainedAt
-    ? new Date(rfMeta.trainedAt).toLocaleString()
-    : "N/A";
+  const RiskIcon = risk.icon;
 
   return (
-    <div className="glass rounded-xl p-5 h-full flex flex-col gap-4 overflow-y-auto">
-      <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">{t("riskEngine")}</h3>
+    <div className="glass rounded-xl p-5 flex flex-col gap-4">
+      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t("riskEngine")}</h3>
 
-      {/* Risk Badge */}
-      <div className={`rounded-lg p-3 border ${risk.bg} ${risk.border} text-center`}>
-        <span className={`text-sm font-bold uppercase tracking-wider ${risk.color}`}>
-          {riskLabel}
-        </span>
+      {/* Risk Badge — Big and clear */}
+      <div className={`rounded-xl p-4 border ${risk.border} bg-gradient-to-br ${risk.gradient} flex items-center gap-4`}>
+        <RiskIcon className={`h-10 w-10 ${risk.color} shrink-0`} />
+        <div>
+          <p className={`text-lg font-bold ${risk.color}`}>{risk.emoji} {riskLabel}</p>
+          <p className="text-xs text-muted-foreground">{risk.desc}</p>
+        </div>
       </div>
 
-      {/* R² Gauge */}
-      <R2Gauge value={predictionData.rSquared} r2Label={t("r2Score")} />
-
-      {/* Stats */}
-      <div className="space-y-2">
-        <StatCard
-          icon={<Waves className="h-4 w-4 text-cyan-glow" />}
+      {/* Stats Grid */}
+      <div className="grid grid-cols-2 gap-2">
+        <Stat
+          icon={<Waves className="h-3.5 w-3.5 text-cyan-400" />}
           label={t("currentDepth")}
           value={`${predictionData.currentDepth.toFixed(1)} ft`}
         />
-        <StatCard
-          icon={isDecline ? <TrendingDown className="h-4 w-4 text-risk-severe" /> : <TrendingUp className="h-4 w-4 text-risk-low" />}
+        <Stat
+          icon={isDecline ? <TrendingDown className="h-3.5 w-3.5 text-red-400" /> : <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />}
           label={t("annualChange")}
-          value={`${isDecline ? "−" : "+"}${Math.abs(rate).toFixed(2)} ft/yr`}
+          value={`${isDecline ? "↓" : "↑"} ${Math.abs(rate).toFixed(2)} ft/yr`}
         />
-        <StatCard
-          icon={<Calendar className="h-4 w-4 text-neon-green" />}
-          label={t("predictionHorizon")}
-          value={t("eightYears")}
-        />
-        <StatCard
-          icon={<Gauge className="h-4 w-4 text-primary" />}
+        <Stat
+          icon={<Gauge className="h-3.5 w-3.5 text-blue-400" />}
           label={t("modelAccuracy")}
           value={`${(predictionData.rSquared * 100).toFixed(1)}%`}
         />
+        <Stat
+          icon={<Calendar className="h-3.5 w-3.5 text-purple-400" />}
+          label={t("predictionHorizon")}
+          value={t("eightYears")}
+        />
       </div>
-
-      {/* Data quality / model provenance */}
-      {rfMeta && (
-        <div className="mt-1 rounded-lg border border-border/30 bg-secondary/20 p-3">
-          <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
-            RF Data Quality
-          </p>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="text-muted-foreground">Model Run ID</div>
-            <div className="text-foreground font-mono">{rfMeta.modelRunId ?? "N/A"}</div>
-            <div className="text-muted-foreground">Training Samples</div>
-            <div className="text-foreground font-mono">{rfMeta.trainingSamples ?? "N/A"}</div>
-            <div className="text-muted-foreground">Year Range</div>
-            <div className="text-foreground font-mono">
-              {rfMeta.yearMin && rfMeta.yearMax ? `${rfMeta.yearMin}-${rfMeta.yearMax}` : "N/A"}
-            </div>
-            <div className="text-muted-foreground">Last Trained</div>
-            <div className="text-foreground font-mono">{trainedAtLabel}</div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="flex items-center gap-3 bg-secondary/30 rounded-lg px-3 py-2.5">
-      {icon}
-      <div className="flex-1 min-w-0">
-        <p className="text-[11px] text-muted-foreground">{label}</p>
-        <p className="text-sm font-semibold font-mono text-foreground">{value}</p>
-      </div>
+    <div className="p-2.5 rounded-lg bg-secondary/20 border border-border/10">
+      <div className="flex items-center gap-1.5 mb-0.5">{icon}<span className="text-[10px] text-muted-foreground">{label}</span></div>
+      <p className="text-sm font-semibold font-mono text-foreground">{value}</p>
     </div>
   );
 }

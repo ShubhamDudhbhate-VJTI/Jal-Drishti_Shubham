@@ -3,8 +3,9 @@ import {
   Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Area, ComposedChart, ReferenceLine, ReferenceDot,
 } from "recharts";
+import { Droplets } from "lucide-react";
 import { useDashboard } from "@/context/DashboardContext";
-import { fetchMonthlyData, type MonthlyPredictionResult } from "@/data/mockData";
+import { fetchAllMonthlyForYear, type MonthlyPredictionResult } from "@/data/mockData";
 import { useLanguage } from "@/context/LanguageContext";
 import { monthShortLabels } from "@/i18n/helpers";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -72,15 +73,16 @@ export function WaterLevelChart() {
     const monthlySource = monthlyData?.dataSource;
 
     const labelFor = (src?: string) => {
+      if (src === "backend") return "Live API";
       if (src === "stored-rf") return "Stored RF";
       if (src === "on-demand-rf") return "On-demand RF";
       if (src === "fallback-api") return "Fallback API";
-      if (src === "fallback-mock") return "Fallback Mock";
-      return "Unknown";
+      if (src === "fallback-mock") return "Simulated";
+      return "—";
     };
 
     const toneFor = (src?: string) => {
-      if (src === "stored-rf" || src === "on-demand-rf") {
+      if (src === "backend" || src === "stored-rf" || src === "on-demand-rf") {
         return "border-emerald-500/40 text-emerald-300 bg-emerald-500/10";
       }
       return "border-amber-500/40 text-amber-300 bg-amber-500/10";
@@ -99,18 +101,22 @@ export function WaterLevelChart() {
   const [nextYearMonthly, setNextYearMonthly] = useState<MonthlyPredictionResult[] | null>(null);
 
   const chartData = useMemo(() => {
-    if (!predictionData) return [];
-    
-    const inferredCurrentYear = Math.max(...predictionData.historicalData.map((d) => d.year));
-    const nextYear = inferredCurrentYear + 1;
+    if (!predictionData) {
+      console.log("[WaterLevelChart] ⏳ No predictionData yet");
+      return [];
+    }
+    console.log("[WaterLevelChart] 📊 Building chart from predictionData:", {
+      historicalCount: predictionData.historicalData?.length,
+      predictedCount: predictionData.predictedData?.length,
+      dataSource: predictionData.dataSource,
+    });
+
     const monthlyLabels = monthShortLabels(t);
-    
-    // Historical yearly data (last 10 years, excluding current year)
+
+    // ── Historical yearly data (2014-2023 from groundwater_cleaned_final) ──
     const historicalYearly = predictionData.historicalData
-      .filter((d) => d.year < inferredCurrentYear)
       .slice()
       .sort((a, b) => a.year - b.year)
-      .slice(-10)
       .map((d) => ({
         year: d.year,
         label: d.year.toString(),
@@ -120,15 +126,35 @@ export function WaterLevelChart() {
         upperCI: undefined as number | undefined,
         lowerCI: undefined as number | undefined,
         isMonthly: false,
+        predicted: false,
       }));
 
-    // Predicted monthly data for next year (from backend)
+    // ── 2024 as "current year" point ──
+    // Average the 4 seasonal predictions for 2024 to create a single yearly point
+    const preds2024 = predictionData.predictedData.filter((d) => d.year === 2024);
+    if (preds2024.length > 0) {
+      const avgDepth2024 = preds2024.reduce((sum, d) => sum + d.depth, 0) / preds2024.length;
+      historicalYearly.push({
+        year: 2024,
+        label: "2024",
+        depth: Math.round(avgDepth2024 * 100) / 100,
+        historicalDepth: Math.round(avgDepth2024 * 100) / 100,
+        predictedDepth: undefined,
+        upperCI: undefined,
+        lowerCI: undefined,
+        isMonthly: false,
+        predicted: false,
+      });
+    }
+
+    // ── 2025 monthly predictions (12 months, interpolated from 4 seasonal anchors) ──
+    const PREDICTION_YEAR = 2025;
     const predictedMonthly = nextYearMonthly
       ? monthlyLabels.map((monthLabel, idx) => {
           const m = nextYearMonthly[idx];
           const depth = m?.exact_depth;
           return {
-            year: nextYear,
+            year: PREDICTION_YEAR,
             label: monthLabel,
             depth,
             historicalDepth: undefined as number | undefined,
@@ -136,18 +162,19 @@ export function WaterLevelChart() {
             upperCI: undefined as number | undefined,
             lowerCI: undefined as number | undefined,
             isMonthly: true,
+            predicted: true,
           };
         })
       : [];
 
-    // Connect the lines between current year and predictions
-    const allData = [
-      ...historicalYearly,
-      ...predictedMonthly
-    ];
+    const allData = [...historicalYearly, ...predictedMonthly];
 
-    // Add bridge points for smooth transitions
-    // (No bridge needed; historical points are discrete, monthly forecast starts right after.)
+    console.log("[WaterLevelChart] ✅ chartData built:", {
+      totalPoints: allData.length,
+      historicalYearly: historicalYearly.length,
+      predictedMonthly: predictedMonthly.length,
+      yearRange: `${historicalYearly[0]?.year}–${historicalYearly[historicalYearly.length - 1]?.year} → ${PREDICTION_YEAR} monthly`,
+    });
 
     return allData;
   }, [predictionData, locale, t, nextYearMonthly]);
@@ -168,21 +195,20 @@ export function WaterLevelChart() {
     };
   }, [selectedMonth, selectedYear, monthlyData, chartData, t]);
 
-  // Load next-year monthly forecast when region changes / after annual prediction loads.
+  // Load 2025 monthly forecast when region changes / after annual prediction loads.
+  // Single API call → interpolate all 12 months locally.
   useEffect(() => {
     let cancelled = false;
     async function load() {
       if (!selectedRegion || !predictionData) return;
 
-      const inferredCurrentYear = Math.max(...predictionData.historicalData.map((d) => d.year));
-      const nextYear = inferredCurrentYear + 1;
+      const PREDICTION_YEAR = 2025;
 
       try {
         setNextYearMonthly(null);
-        const results = await Promise.all(
-          Array.from({ length: 12 }, (_, i) => fetchMonthlyData(selectedRegion.name, nextYear, i + 1))
-        );
+        const results = await fetchAllMonthlyForYear(selectedRegion.name, PREDICTION_YEAR);
         if (cancelled) return;
+        console.log("[WaterLevelChart] 📈 2025 monthly forecast loaded:", results.length, "months");
         setNextYearMonthly(results);
       } catch {
         if (cancelled) return;
@@ -196,11 +222,24 @@ export function WaterLevelChart() {
     };
   }, [selectedRegion, predictionData]);
 
+  // Show loading state while fetching data
+  if (isLoading && !predictionData) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-glow mx-auto mb-4"></div>
+          <p className="text-muted-foreground text-sm">Loading groundwater data...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!selectedRegion) {
     return (
       <div className="flex items-center justify-center h-full glass rounded-xl">
-        <div className="text-center">
-          <p className="text-muted-foreground text-lg">{t("selectRegionToBegin")}</p>
+        <div className="text-center py-8">
+          <Droplets className="h-10 w-10 text-cyan-glow mx-auto mb-3 opacity-50" />
+          <p className="text-muted-foreground text-base">{t("selectRegionToBegin")}</p>
           <p className="text-muted-foreground/60 text-sm mt-1">{t("chooseFromSidebar")}</p>
         </div>
       </div>
@@ -215,36 +254,23 @@ export function WaterLevelChart() {
       </div>
     );
   }
-  const derivedCurrentYear = predictionData ? Math.max(...predictionData.historicalData.map((d) => d.year)) : 2026;
-  const currentYear = derivedCurrentYear;
-  const lastHistorical = chartData
-    .slice()
-    .reverse()
-    .find((d) => !d.isMonthly);
-  const referenceLineX = lastHistorical?.label ?? currentYear.toString();
+  // The reference line marks the boundary between historical (up to 2024) and predicted (2025)
+  const referenceLineX = "2024";
 
   return (
     <div className="glass rounded-xl p-5 h-full flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-base font-semibold text-foreground">{t("groundwaterDepthAnalysis")}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{selectedRegion.name} • {selectedRegion.district}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">📍 {selectedRegion.name} • {selectedRegion.district}</p>
         </div>
-        <div className="flex items-center gap-3 text-xs">
-          <div className={`px-2 py-1 rounded-full border ${sourceMeta.annualTone}`}>
-            Source: {sourceMeta.annualLabel}
-          </div>
-          {sourceMeta.showMonthly && (
-            <div className={`px-2 py-1 rounded-full border ${sourceMeta.monthlyTone}`}>
-              Monthly: {sourceMeta.monthlyLabel}
-            </div>
-          )}
+        <div className="flex items-center gap-4 text-xs">
           <span className="flex items-center gap-1.5">
-            <span className="w-4 h-0.5 bg-cyan-glow rounded-full inline-block" />
+            <span className="w-3 h-3 rounded-full bg-cyan-400 inline-block" />
             {t("legendHistoricalYearly")}
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-4 h-0.5 bg-neon-green rounded-full inline-block" style={{ backgroundImage: "repeating-linear-gradient(90deg, hsl(145,100%,50%) 0, hsl(145,100%,50%) 4px, transparent 4px, transparent 8px)" }} />
+            <span className="w-3 h-3 rounded-full bg-emerald-400 inline-block" style={{ border: '2px dashed hsl(145,100%,50%)' }} />
             {t("legendPredictedMonthly")}
           </span>
         </div>

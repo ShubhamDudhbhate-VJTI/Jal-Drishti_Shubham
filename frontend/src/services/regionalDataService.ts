@@ -1,7 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-console.log('RegionalDataService module loaded. API_BASE_URL:', API_BASE_URL);
-
 export interface MhDistrict {
   district_code: number | string;
   district_name: string;
@@ -30,18 +28,33 @@ export interface MhDistrictWithSubDistricts extends MhDistrict {
   mh_subdistricts: MhSubDistrict[];
 }
 
+// ── Simple in-memory cache to avoid redundant API calls ──
+const _apiCache = new Map<string, { ts: number; data: unknown }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCached<T>(key: string): T | null {
+  const entry = _apiCache.get(key);
+  if (entry && Date.now() - entry.ts < CACHE_TTL_MS) return entry.data as T;
+  return null;
+}
+
+function setCache(key: string, data: unknown) {
+  _apiCache.set(key, { ts: Date.now(), data });
+}
+
 export class RegionalDataService {
   // Fetch all unique districts from FastAPI backend
   static async getDistricts(): Promise<MhDistrict[]> {
-    console.log('RegionalDataService.getDistricts() called...');
-    console.log(`Fetching districts from: ${API_BASE_URL}/api/cleaned/districts`);
+    const cacheKey = "districts";
+    const cached = getCached<MhDistrict[]>(cacheKey);
+    if (cached) return cached;
+
     const resp = await fetch(`${API_BASE_URL}/api/cleaned/districts`);
     if (!resp.ok) {
-      console.error(`Districts API failed: ${resp.status} ${resp.statusText}`);
       throw new Error(`Failed to fetch districts: ${resp.status}`);
     }
     const data: { district_code: number; district_name: string }[] = await resp.json();
-    console.log(`Districts API returned ${data.length} districts`);
+    setCache(cacheKey, data);
     return data;
   }
 
@@ -63,36 +76,44 @@ export class RegionalDataService {
 
   // Fetch unique blocks for a district from FastAPI backend
   static async getSubDistricts(districtName: string): Promise<MhSubDistrict[]> {
+    const cacheKey = `blocks:${districtName}`;
+    const cached = getCached<MhSubDistrict[]>(cacheKey);
+    if (cached) return cached;
+
     const resp = await fetch(`${API_BASE_URL}/api/cleaned/blocks/${encodeURIComponent(districtName)}`);
     if (!resp.ok) throw new Error(`Failed to fetch blocks: ${resp.status}`);
     const data: { subdistrict_code: number; subdistrict_name: string; district_name: string }[] = await resp.json();
-    return data.map((b) => ({
+    const result = data.map((b) => ({
       subdistrict_code: b.subdistrict_code,
       subdistrict_name: b.subdistrict_name,
       district_code: districtName,
       district_name: b.district_name,
     }));
+    setCache(cacheKey, result);
+    return result;
   }
 
   // Fetch villages for a district and block from FastAPI backend
   static async getVillages(districtName: string, blockName: string): Promise<MhVillage[]> {
+    const cacheKey = `villages:${districtName}:${blockName}`;
+    const cached = getCached<MhVillage[]>(cacheKey);
+    if (cached) return cached;
+
     const url = `${API_BASE_URL}/api/cleaned/villages/${encodeURIComponent(districtName)}/${encodeURIComponent(blockName)}`;
-    console.log(`Fetching villages from: ${url}`);
     const resp = await fetch(url);
     if (!resp.ok) {
-      console.error(`Villages API failed: ${resp.status} ${resp.statusText}`);
-      console.error(`URL was: ${url}`);
       throw new Error(`Failed to fetch villages: ${resp.status}`);
     }
     const data: { village_code: number; village_name: string; subdistrict_name: string; district_name: string }[] =
       await resp.json();
-    console.log(`Villages API returned ${data.length} villages for ${districtName}/${blockName}`);
-    return data.map((v) => ({
+    const result = data.map((v) => ({
       village_code: v.village_code,
       village_name: v.village_name,
       subdistrict_code: blockName,
       district_code: districtName,
     }));
+    setCache(cacheKey, result);
+    return result;
   }
 
   // Search villages using the fast backend search endpoint (single API call)

@@ -42,7 +42,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   });
 
   const setSelectedRegion = useCallback((region: Region) => {
-    console.log('setSelectedRegion called with:', region);
     setSelectedRegionState(region);
     setSessionHistory((prev) => {
       const filtered = prev.filter((r) => r.id !== region.id);

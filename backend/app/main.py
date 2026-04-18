@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import Any
@@ -487,3 +488,132 @@ def get_all_village_risks(district: str = None, block: str = None):
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# Graph data API endpoint for plotting
+@app.get("/api/graph-data/{village_name}")
+async def get_graph_data(village_name: str):
+    """
+    Comprehensive graph data endpoint combining historical data, predictions, and risk.
+    Returns data in format optimized for chart libraries (Chart.js, Recharts, etc.).
+
+    Optimised: uses in-memory cache + fires all 3 Supabase queries in parallel.
+    """
+    cache_key = f"graph:{village_name}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    hdrs = _headers()
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Fire all three Supabase queries concurrently
+            history_task = client.get(
+                f"{SUPABASE_URL}/rest/v1/groundwater_cleaned_final",
+                params={"select": "*", "village": f"eq.{village_name}", "limit": "1"},
+                headers=hdrs,
+            )
+            predictions_task = client.get(
+                f"{SUPABASE_URL}/rest/v1/groundwater_predictions",
+                params={"select": "*", "village": f"eq.{village_name}", "order": "season"},
+                headers=hdrs,
+            )
+            risk_task = client.get(
+                f"{SUPABASE_URL}/rest/v1/groundwater_village_risk",
+                params={"select": "*", "village": f"eq.{village_name}", "limit": "1"},
+                headers=hdrs,
+            )
+
+            history_resp, prediction_resp, risk_resp = await asyncio.gather(
+                history_task, predictions_task, risk_task
+            )
+
+        # --- History (also provides village metadata) ---
+        history_resp.raise_for_status()
+        history_rows = history_resp.json()
+        if not history_rows:
+            raise HTTPException(status_code=404, detail=f"Village '{village_name}' not found")
+
+        history_row = history_rows[0]
+        village_id = history_row["id"]
+        district = history_row.get("district", "")
+        block = history_row.get("block", "")
+
+        historical_points = []
+        for year in HISTORY_YEARS:
+            depths = []
+            for month in HISTORY_MONTHS:
+                val = history_row.get(f"y{year}_{month}")
+                if val is not None:
+                    depths.append(float(val))
+            if depths:
+                historical_points.append({
+                    "year": year,
+                    "depth": round(sum(depths) / len(depths), 2),
+                    "type": "historical",
+                    "season": None,
+                })
+
+        # --- Predictions ---
+        prediction_resp.raise_for_status()
+        prediction_data = prediction_resp.json()
+
+        prediction_points = []
+        for pred in prediction_data:
+            season = pred.get("season", "").lower()
+            for yr_key, yr_val in (("predicted_2024", 2024), ("predicted_2025", 2025)):
+                depth = pred.get(yr_key)
+                if depth is not None:
+                    prediction_points.append({
+                        "year": yr_val,
+                        "depth": float(depth),
+                        "type": "prediction",
+                        "season": season,
+                        "confidence_low": pred.get("confidence_low"),
+                        "confidence_high": pred.get("confidence_high"),
+                    })
+
+        # --- Risk ---
+        risk_data: dict = {}
+        if risk_resp.status_code == 200:
+            risk_json = risk_resp.json()
+            if risk_json:
+                r = risk_json[0]
+                risk_data = {
+                    "risk_level": r.get("risk_level", "MODERATE"),
+                    "avg_actual_2024": r.get("avg_actual_2024"),
+                    "avg_predicted_2024": r.get("avg_predicted_2024"),
+                    "avg_predicted_2025": r.get("avg_predicted_2025"),
+                    "avg_difference": r.get("avg_difference"),
+                    "trend": "increasing" if r.get("avg_difference", 0) > 0 else "decreasing",
+                }
+
+        # Combine & sort
+        all_points = historical_points + prediction_points
+        all_points.sort(key=lambda x: (x["year"], x["season"] or ""))
+
+        result = {
+            "village": {
+                "name": village_name,
+                "id": village_id,
+                "district": district,
+                "block": block,
+            },
+            "graph_data": all_points,
+            "risk_analysis": risk_data,
+            "metadata": {
+                "historical_years": len(historical_points),
+                "prediction_points": len(prediction_points),
+                "data_source": "supabase",
+                "last_updated": "2024-01-01",
+            },
+        }
+
+        _set_cached(cache_key, result)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating graph data: {str(e)}")
