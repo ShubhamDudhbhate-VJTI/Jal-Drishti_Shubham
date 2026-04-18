@@ -15,13 +15,13 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY") or ""
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
+# Using local Ollama AI - no API key needed!
+OLLAMA_URL = "http://localhost:11434/api/chat"
 
 # Debug: Print environment variables (remove in production)
 print(f"DEBUG: SUPABASE_URL loaded: {bool(SUPABASE_URL)}")
 print(f"DEBUG: SUPABASE_KEY loaded: {bool(SUPABASE_KEY)}")
-print(f"DEBUG: GEMINI_API_KEY loaded: {bool(GEMINI_API_KEY)}")
-print(f"DEBUG: GEMINI_API_KEY starts with AIza: {GEMINI_API_KEY.startswith('AIza') if GEMINI_API_KEY else False}")
+print(f"DEBUG: Using local Ollama AI (free!)")
 
 
 def _headers() -> dict[str, str]:
@@ -481,7 +481,7 @@ def get_village_risk(village_name: str):
 @app.get("/api/village-risk")
 def get_all_village_risks(district: str = None, block: str = None):
     """Fetch all village risks, optionally filtered."""
-    params: dict[str, str] = {"select": "*", "order": "village"}
+    params: dict[str, str] = {"select": "*", "model": "llama-2.5b", "order": "village"}
     if district:
         params["district"] = f"eq.{district}"
     if block:
@@ -627,27 +627,56 @@ async def get_graph_data(village_name: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GEMINI AI CHATBOT — farmer groundwater advisor
+# GROK AI CHATBOT — farmer groundwater advisor
 # ═══════════════════════════════════════════════════════════════════════════
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+OLLAMA_URL = "http://localhost:11434/api/generate"
 
-SYSTEM_PROMPT = """You are **Jal-Drishti AI**, a friendly groundwater advisor for Indian farmers.
-You speak in simple, practical language. You can respond in English, Hindi, or Marathi based on the user's language.
+SYSTEM_PROMPT = """You are **Jal-Drishti AI**, an intelligent and compassionate AI assistant specifically designed for Indian farmers. You have deep expertise in groundwater management, agriculture, and rural development in Maharashtra and across India.
 
-Your job:
-• Explain groundwater depth data in farmer-friendly terms (shallow = good for wells, deep = need borewells)
-• Give irrigation and crop advice based on water availability
-• Warn about declining water tables and suggest conservation
-• Answer questions about the village's risk level and predictions
-• Keep answers concise (3-5 sentences max) unless the farmer asks for details
+**PRIMARY EXPERTISE - GROUNDWATER & AGRICULTURE:**
+* Groundwater depth analysis: Under 50ft = excellent for wells, 50-100ft = moderate (needs borewells), over 100ft = critical (deep borewells needed)
+* Irrigation methods: Drip irrigation for water conservation, sprinkler for moderate areas, flood irrigation only when water is abundant
+* Crop recommendations based on water availability: High-water crops (rice, sugarcane) for shallow water, drought-resistant (millets, pulses, cotton) for deep water
+* Water conservation techniques: Rainwater harvesting, check dams, farm ponds, contour bunding
+* Seasonal planning: Kharif (monsoon), Rabi (winter), and Zaid (summer) crop selection based on water tables
+* Risk assessment: Understanding water table decline, drought prediction, and mitigation strategies
 
-IMPORTANT RULES:
-• Always reference the specific village data provided in the context
-• Use local units (feet) for depth
-• Be encouraging but honest about risks
-• If no village is selected, ask the farmer to select one first
-• Never make up data — only use what's provided in the context"""
+**GENERAL KNOWLEDGE EXPERTISE:**
+* Indian politics and governance: Prime Minister, Chief Ministers, agricultural policies
+* Indian geography: States, capitals, major rivers, agricultural regions
+* Farming techniques: Organic farming, modern agriculture, government schemes
+* Rural development: PM Kisan Samman Nidhi, crop insurance, agricultural loans
+* Weather and climate: Monsoon patterns, drought cycles, climate change impact
+
+**COMMUNICATION STYLE:**
+* Speak in simple, practical farmer-friendly language
+* Use local units (feet for depth, acres for land, inches for rainfall)
+* Be encouraging but realistic about challenges
+- Provide actionable advice with specific steps
+* Respond in English, Hindi, or Marathi based on user's language preference
+* Keep answers concise (3-5 sentences) but offer to elaborate if needed
+
+**CRITICAL RULES:**
+1. **Data-First Approach**: Always use the specific village data provided in context before giving advice
+2. **Context Awareness**: Reference the village name, district, current depth, risk level, and predictions
+3. **Honest Assessment**: Clearly explain risks without causing panic, suggest practical solutions
+4. **Local Relevance**: Focus on Maharashtra-specific conditions when applicable
+5. **No Fabrication**: Use provided data for village-specific info, general knowledge for other topics
+6. **Progressive Disclosure**: Start with simple advice, offer detailed explanations if asked
+7. **Safety First**: Prioritize farmer's economic and environmental sustainability
+
+**RESPONSE STRUCTURE:**
+1. Acknowledge the specific village/context if provided
+2. Give direct answer to the question
+3. Provide 2-3 actionable recommendations
+4. Mention relevant risks or considerations
+5. Offer to explain further if needed
+
+**EXAMPLE RESPONSES:**
+- For water depth: "In [Village Name], your groundwater is at [X]ft, which is [shallow/moderate/deep]. This means you can [specific recommendation]. I suggest [2-3 action steps]."
+- For general questions: "The current Prime Minister of India is Narendra Modi. He has been in office since 2014 and has launched several agricultural schemes."
+"""
 
 
 from pydantic import BaseModel
@@ -667,83 +696,172 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-async def chat_with_gemini(req: ChatRequest):
-    """AI-powered chatbot for farmer groundwater guidance using Gemini."""
-    if not GEMINI_API_KEY:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+async def chat_with_ollama(req: ChatRequest):
+    """AI-powered chatbot for farmer groundwater guidance using free local Ollama."""
+    # No API key needed - using local Ollama!
 
-    # Build context from village data
+    # Build comprehensive context from village data
     context_parts = []
+    
     if req.village_name:
-        context_parts.append(f"Village: {req.village_name}")
+        # Basic location information
+        context_parts.append(f"**Village Location**: {req.village_name}")
         if req.district:
-            context_parts.append(f"District: {req.district}, Block: {req.block or 'N/A'}")
-        if req.risk_level:
-            context_parts.append(f"Risk Level: {req.risk_level}")
+            context_parts.append(f"**District**: {req.district}, Block: {req.block or 'N/A'}")
+        
+        # Groundwater depth analysis with interpretation
         if req.current_depth is not None:
-            context_parts.append(f"Current Groundwater Depth: {req.current_depth:.1f} ft")
+            depth = req.current_depth
+            if depth < 50:
+                depth_category = "SHALLOW (Excellent)"
+                implications = "Easy well installation, low pumping costs, suitable for most crops"
+                recommended_irrigation = "Drip irrigation, flood irrigation, sprinkler systems"
+            elif depth < 100:
+                depth_category = "MODERATE (Manageable)"
+                implications = "Requires borewells, moderate pumping costs, choose water-efficient crops"
+                recommended_irrigation = "Drip irrigation recommended, sprinkler acceptable"
+            else:
+                depth_category = "DEEP (Critical)"
+                implications = "Deep borewells required, high pumping costs, urgent water conservation needed"
+                recommended_irrigation = "Only drip irrigation, strict water conservation"
+            
+            context_parts.append(f"**Current Groundwater Depth**: {depth:.1f} ft - {depth_category}")
+            context_parts.append(f"**Implications**: {implications}")
+            context_parts.append(f"**Recommended Irrigation**: {recommended_irrigation}")
+        
+        # Risk assessment with actionable advice
+        if req.risk_level:
+            risk = req.risk_level.upper()
+            if risk == "HIGH":
+                risk_implications = "Urgent water conservation measures needed, implement rainwater harvesting"
+                recommended_crops = "Drought-resistant crops: millets, pulses, cotton, sorghum"
+                conservation_actions = "Check dams, farm ponds, contour bunding, drip irrigation"
+            elif risk == "MODERATE":
+                risk_implications = "Careful water management required, monitor levels regularly"
+                recommended_crops = "Mixed cropping: some water-intensive + drought-resistant varieties"
+                conservation_actions = "Drip irrigation, rainwater harvesting, crop rotation"
+            else:  # LOW
+                risk_implications = "Current practices sustainable, but maintain conservation habits"
+                recommended_crops = "Wide variety possible including moderate water-intensive crops"
+                conservation_actions = "Continue efficient irrigation, consider future climate change"
+            
+            context_parts.append(f"**Water Risk Level**: {risk}")
+            context_parts.append(f"**Risk Implications**: {risk_implications}")
+            context_parts.append(f"**Recommended Crops**: {recommended_crops}")
+            context_parts.append(f"**Conservation Actions**: {conservation_actions}")
+        
+        # Trend analysis
         if req.annual_change_rate is not None:
-            direction = "declining" if req.annual_change_rate > 0 else "improving"
-            context_parts.append(f"Annual Change: {abs(req.annual_change_rate):.2f} ft/year ({direction})")
-        if req.historical_data:
-            years = [d.get("year") for d in req.historical_data[-5:]]
-            depths = [f"{d.get('depth', 0):.1f}" for d in req.historical_data[-5:]]
-            context_parts.append(f"Recent Historical Depths (ft): {', '.join(f'{y}: {d}' for y, d in zip(years, depths))}")
+            rate = req.annual_change_rate
+            trend = "declining" if rate > 0 else "improving"
+            urgency = "URGENT" if abs(rate) > 2 else "MODERATE" if abs(rate) > 0.5 else "STABLE"
+            context_parts.append(f"**Annual Water Table Change**: {abs(rate):.2f} ft/year ({trend}) - {urgency} priority")
+        
+        # Historical analysis with patterns
+        if req.historical_data and len(req.historical_data) >= 3:
+            recent_data = req.historical_data[-5:]
+            depths = [d.get("depth", 0) for d in recent_data if d.get("depth") is not None]
+            if depths:
+                min_depth = min(depths)
+                max_depth = max(depths)
+                avg_depth = sum(depths) / len(depths)
+                volatility = "HIGH" if (max_depth - min_depth) > 20 else "MODERATE" if (max_depth - min_depth) > 10 else "LOW"
+                
+                context_parts.append(f"**Historical Analysis (Last 5 years)**:")
+                context_parts.append(f"- Average depth: {avg_depth:.1f} ft")
+                context_parts.append(f"- Range: {min_depth:.1f} - {max_depth:.1f} ft (Volatility: {volatility})")
+                
+                # Trend detection
+                if len(depths) >= 3:
+                    recent_avg = sum(depths[-3:]) / 3
+                    older_avg = sum(depths[:-3]) / len(depths[:-3]) if len(depths) > 3 else recent_avg
+                    if recent_avg > older_avg + 2:
+                        context_parts.append(f"- **Trend**: Water table declining significantly")
+                    elif recent_avg < older_avg - 2:
+                        context_parts.append(f"- **Trend**: Water table improving")
+                    else:
+                        context_parts.append(f"- **Trend**: Relatively stable")
+        
+        # Future predictions with planning advice
         if req.predicted_data:
-            for p in req.predicted_data[:4]:
-                context_parts.append(f"Predicted {p.get('year', 'N/A')}: {p.get('depth', 0):.1f} ft")
+            context_parts.append(f"**Future Predictions**:")
+            for p in req.predicted_data[:3]:  # Show next 3 predictions
+                year = p.get("year", "N/A")
+                depth = p.get("depth", 0)
+                if depth:
+                    if req.current_depth:
+                        change = depth - req.current_depth
+                        change_desc = f"({change:+.1f} ft from current)"
+                        if change > 5:
+                            urgency_level = "HIGH CONCERN"
+                        elif change > 2:
+                            urgency_level = "MODERATE CONCERN"
+                        elif change < -2:
+                            urgency_level = "IMPROVING"
+                        else:
+                            urgency_level = "STABLE"
+                        
+                        context_parts.append(f"- {year}: {depth:.1f} ft {change_desc} - {urgency_level}")
+                    else:
+                        context_parts.append(f"- {year}: {depth:.1f} ft")
+        
+        # Maharashtra-specific context
+        if "Maharashtra" in str(req.district):
+            context_parts.append(f"**Maharashtra Context**:")
+            context_parts.append(f"- Major crops: Cotton, sugarcane, soybean, pulses, millets")
+            context_parts.append(f"- Climate: Semi-arid to arid, monsoon-dependent agriculture")
+            context_parts.append(f"- Water sources: Primarily groundwater, some perennial rivers")
+            context_parts.append(f"- Government schemes: PMKisan, crop insurance, watershed programs")
+    
     else:
-        context_parts.append("No village selected yet. Ask the farmer to select a village from the sidebar.")
+        context_parts.append("**No Village Selected**: Please ask the farmer to select a village from the sidebar to get personalized groundwater advice.")
+        context_parts.append("**General Advice Available**: Can answer questions about Indian agriculture, government schemes, and general farming practices.")
 
     village_context = "\n".join(context_parts)
 
-    # Build Gemini messages
-    contents = []
+    # Build OpenAI-compatible messages for xAI
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     # Add chat history (last 6 messages for context)
     if req.chat_history:
         for msg in req.chat_history[-6:]:
-            role = "user" if msg.get("role") == "user" else "model"
-            contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+            role = "user" if msg.get("role") == "user" else "assistant"
+            messages.append({"role": role, "content": msg.get("content", "")})
 
     # Add current user message with village context
-    user_text = f"""[Village Data Context]
-{village_context}
+    user_text = f"[Village Data Context]\n{village_context}\n\n[Farmer's Question]\n{req.message}"
 
-[Farmer's Question]
-{req.message}"""
+    messages.append({"role": "user", "content": user_text})
 
-    contents.append({"role": "user", "parts": [{"text": user_text}]})
-
-    # Call Gemini API
+    # Call Ollama API (free local AI)
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        # Build prompt for Ollama - context first, then question
+        prompt_text = f"{SYSTEM_PROMPT}\n\nVillage Context:\n{village_context}\n\nFarmer Question: {req.message}\n\nAssistant Response:"
+        
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                OLLAMA_URL,
                 json={
-                    "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-                    "contents": contents,
-                    "generationConfig": {
-                        "temperature": 0.7,
-                        "maxOutputTokens": 500,
-                    },
+                    "model": "llama3.2:1b",  # Small 1B model - fast and efficient
+                    "prompt": prompt_text,
+                    "stream": False,
                 },
             )
 
         if resp.status_code != 200:
             error_detail = resp.text[:200]
-            raise HTTPException(status_code=502, detail=f"Gemini API error: {error_detail}")
+            raise HTTPException(status_code=502, detail=f"Ollama API error: {error_detail}")
 
         data = resp.json()
-        candidates = data.get("candidates", [])
-        if not candidates:
-            raise HTTPException(status_code=502, detail="No response from Gemini")
-
-        ai_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        ai_text = data.get("response", "")
+        
+        if not ai_text:
+            ai_text = "I'm here to help with your groundwater questions!"
+            
         return {"response": ai_text}
 
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Gemini API timeout")
+        raise HTTPException(status_code=504, detail="Ollama API timeout")
     except HTTPException:
         raise
     except Exception as e:
