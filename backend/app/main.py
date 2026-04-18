@@ -15,6 +15,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY") or ""
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or ""
 
 
 def _headers() -> dict[str, str]:
@@ -617,3 +618,127 @@ async def get_graph_data(village_name: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating graph data: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GEMINI AI CHATBOT — farmer groundwater advisor
+# ═══════════════════════════════════════════════════════════════════════════
+
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+SYSTEM_PROMPT = """You are **Jal-Drishti AI**, a friendly groundwater advisor for Indian farmers.
+You speak in simple, practical language. You can respond in English, Hindi, or Marathi based on the user's language.
+
+Your job:
+• Explain groundwater depth data in farmer-friendly terms (shallow = good for wells, deep = need borewells)
+• Give irrigation and crop advice based on water availability
+• Warn about declining water tables and suggest conservation
+• Answer questions about the village's risk level and predictions
+• Keep answers concise (3-5 sentences max) unless the farmer asks for details
+
+IMPORTANT RULES:
+• Always reference the specific village data provided in the context
+• Use local units (feet) for depth
+• Be encouraging but honest about risks
+• If no village is selected, ask the farmer to select one first
+• Never make up data — only use what's provided in the context"""
+
+
+from pydantic import BaseModel
+
+
+class ChatRequest(BaseModel):
+    message: str
+    village_name: str | None = None
+    district: str | None = None
+    block: str | None = None
+    historical_data: list[dict] | None = None
+    predicted_data: list[dict] | None = None
+    risk_level: str | None = None
+    current_depth: float | None = None
+    annual_change_rate: float | None = None
+    chat_history: list[dict] | None = None
+
+
+@app.post("/api/chat")
+async def chat_with_gemini(req: ChatRequest):
+    """AI-powered chatbot for farmer groundwater guidance using Gemini."""
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+
+    # Build context from village data
+    context_parts = []
+    if req.village_name:
+        context_parts.append(f"Village: {req.village_name}")
+        if req.district:
+            context_parts.append(f"District: {req.district}, Block: {req.block or 'N/A'}")
+        if req.risk_level:
+            context_parts.append(f"Risk Level: {req.risk_level}")
+        if req.current_depth is not None:
+            context_parts.append(f"Current Groundwater Depth: {req.current_depth:.1f} ft")
+        if req.annual_change_rate is not None:
+            direction = "declining" if req.annual_change_rate > 0 else "improving"
+            context_parts.append(f"Annual Change: {abs(req.annual_change_rate):.2f} ft/year ({direction})")
+        if req.historical_data:
+            years = [d.get("year") for d in req.historical_data[-5:]]
+            depths = [f"{d.get('depth', 0):.1f}" for d in req.historical_data[-5:]]
+            context_parts.append(f"Recent Historical Depths (ft): {', '.join(f'{y}: {d}' for y, d in zip(years, depths))}")
+        if req.predicted_data:
+            for p in req.predicted_data[:4]:
+                context_parts.append(f"Predicted {p.get('year', 'N/A')}: {p.get('depth', 0):.1f} ft")
+    else:
+        context_parts.append("No village selected yet. Ask the farmer to select a village from the sidebar.")
+
+    village_context = "\n".join(context_parts)
+
+    # Build Gemini messages
+    contents = []
+
+    # Add chat history (last 6 messages for context)
+    if req.chat_history:
+        for msg in req.chat_history[-6:]:
+            role = "user" if msg.get("role") == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+
+    # Add current user message with village context
+    user_text = f"""[Village Data Context]
+{village_context}
+
+[Farmer's Question]
+{req.message}"""
+
+    contents.append({"role": "user", "parts": [{"text": user_text}]})
+
+    # Call Gemini API
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                json={
+                    "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "contents": contents,
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "maxOutputTokens": 500,
+                    },
+                },
+            )
+
+        if resp.status_code != 200:
+            error_detail = resp.text[:200]
+            raise HTTPException(status_code=502, detail=f"Gemini API error: {error_detail}")
+
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise HTTPException(status_code=502, detail="No response from Gemini")
+
+        ai_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        return {"response": ai_text}
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Gemini API timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
