@@ -9,17 +9,23 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from groq import Groq
 
 # Load .env from project root
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY") or ""
-OLLAMA_URL = "http://localhost:11434/api/generate"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
+
+# ── Groq client ───────────────────────────────────────────────────────────
+GROQ_CLIENT = Groq(api_key=GROQ_API_KEY)
+GROQ_MODEL  = "llama-3.3-70b-versatile"   # Best free model for Hindi/Marathi/English
 
 print(f"DEBUG: SUPABASE_URL loaded: {bool(SUPABASE_URL)}")
 print(f"DEBUG: SUPABASE_KEY loaded: {bool(SUPABASE_KEY)}")
-print(f"DEBUG: Using local Ollama AI (free!)")
+print(f"DEBUG: GROQ_API_KEY loaded: {bool(GROQ_API_KEY)}")
+print(f"DEBUG: Using Groq Cloud AI — model: {GROQ_MODEL} (free!)")
 
 
 def _headers() -> dict[str, str]:
@@ -92,6 +98,7 @@ def health_check():
         "supabase_url": SUPABASE_URL or "NOT SET",
         "supabase_status": supabase_status,
         "supabase_error": supabase_error,
+        "ai_backend": f"Groq Cloud ({GROQ_MODEL})",
     }
 
 
@@ -520,7 +527,7 @@ async def get_graph_data(village_name: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# AI CHATBOT — qwen2.5:7b powered, multilingual, guide-style
+# AI CHATBOT — Groq llama-3.3-70b, multilingual (en/hi/mr), guide-style
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── Identity & Persona ────────────────────────────────────────────────────
@@ -574,7 +581,7 @@ For off-topic: "I'm specialized in farming and water. I can't help with that, bu
 TONE: Warm, confident, and guiding. Like a mentor who cares. Never robotic.
 """
 
-# ── Language Instructions (qwen2.5:7b handles Devanagari natively) ─────────
+# ── Language Instructions ─────────────────────────────────────────────────
 LANGUAGE_INSTRUCTIONS = {
     "en": (
         "Respond in clear, simple English. "
@@ -608,11 +615,25 @@ FALLBACKS = {
 
 
 from pydantic import BaseModel
+import re
+
+
+def detect_language(text: str) -> str:
+    """Detect language from text input (English, Hindi, Marathi)"""
+    # Check for Devanagari script (Hindi/Marathi)
+    if re.search(r'[\u0900-\u097F]', text):
+        # Check for Marathi-specific words
+        marathi_words = ['काय', 'तुम्ही', 'मला', 'कसे', 'कधी', 'करता', 'आहे', 'करून', 'मित्र', 'आहेत']
+        if any(word in text for word in marathi_words):
+            return "mr"
+        else:
+            return "hi"
+    return "en"
 
 
 class ChatRequest(BaseModel):
     message: str
-    language: str = "en"          # en | hi | mr
+    language: str = "auto"         # en | hi | mr | auto
     village_name: str | None = None
     district: str | None = None
     block: str | None = None
@@ -625,13 +646,14 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-async def chat_with_ollama(req: ChatRequest):
+async def chat_with_groq(req: ChatRequest):
     """
-    Jal-Drishti AI chatbot — qwen2.5:7b, multilingual (en/hi/mr),
+    Jal-Drishti AI chatbot — Groq llama-3.3-70b-versatile, multilingual (en/hi/mr),
     guide-style responses, covers all farming-related topics.
+    Free: 14,400 requests/day, 500,000 tokens/day.
     """
 
-    # ── 1. Build village data context (only what's available) ────────────────
+    # ── 1. Build village data context ────────────────────────────────────────
     ctx = []
     if req.village_name:
         ctx.append(f"📍 Village: {req.village_name}" + (f", {req.district}" if req.district else "") + (f", {req.block}" if req.block else ""))
@@ -693,85 +715,63 @@ async def chat_with_ollama(req: ChatRequest):
 
     village_context = "\n".join(ctx) if ctx else "No village selected — give general Maharashtra farming advice."
 
-    # ── 2. Chat history (last 4 turns) ────────────────────────────────────────
-    history_text = ""
+    # ── 2. Chat history (last 4 turns) as Groq messages ──────────────────────
+    groq_messages = []
     if req.chat_history:
         for msg in req.chat_history[-4:]:
-            role = "Farmer" if msg.get("role") == "user" else "Jal-Drishti"
-            history_text += f"{role}: {msg.get('content', '').strip()}\n"
+            role = msg.get("role", "user")
+            if role not in ("user", "assistant"):
+                role = "user"
+            groq_messages.append({
+                "role": role,
+                "content": msg.get("content", "").strip()
+            })
 
     # ── 3. Language instruction ───────────────────────────────────────────────
-    lang = req.language if req.language in LANGUAGE_INSTRUCTIONS else "en"
+    if req.language == "auto":
+        # Auto-detect language from user message
+        lang = detect_language(req.message)
+    else:
+        lang = req.language if req.language in LANGUAGE_INSTRUCTIONS else "en"
+    
     lang_rule = LANGUAGE_INSTRUCTIONS[lang]
 
-    # ── 4. Full prompt ────────────────────────────────────────────────────────
-    # qwen2.5:7b uses ChatML format internally but Ollama's /api/generate
-    # works fine with a well-structured plain prompt.
-    full_prompt = f"""{SYSTEM_PROMPT}
-
-=== LANGUAGE RULE (HIGHEST PRIORITY) ===
+    # ── 4. Build user message ─────────────────────────────────────────────────
+    user_content = f"""=== LANGUAGE RULE (HIGHEST PRIORITY) ===
 {lang_rule}
 
 === FARMER'S VILLAGE DATA ===
 {village_context}
-{"=== RECENT CONVERSATION ===\n" + history_text if history_text else ""}
+
 === FARMER'S MESSAGE ===
-{req.message}
+{req.message}"""
 
-=== Jal-Drishti AI Response ==="""
+    groq_messages.append({"role": "user", "content": user_content})
 
-    # ── 5. Call Ollama ────────────────────────────────────────────────────────
+    # ── 5. Call Groq API (cloud, free, fast) ──────────────────────────────────
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            resp = await client.post(
-                OLLAMA_URL,
-                json={
-                    "model": "qwen2.5:7b",
-                    "prompt": full_prompt,
-                    "stream": False,
-                    "options": {
-                        "num_predict": 256,      # faster responses
-                        "temperature": 0.5,     # more focused
-                        "top_p": 0.9,
-                        "repeat_penalty": 1.1,   # avoid repetition
-                        "stop": [
-                            "=== Farmer",
-                            "Farmer:",
-                            "=== FARMER",
-                            "\n\n\n\n",
-                        ],
-                    },
-                },
-            )
+        response = GROQ_CLIENT.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                *groq_messages,
+            ],
+            max_tokens=512,
+            temperature=0.5,
+            top_p=0.9,
+        )
 
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Ollama error: {resp.text[:300]}")
-
-        data = resp.json()
-        ai_text = (data.get("response") or "").strip()
-
-        # Strip any leaked prompt artifacts
-        for artifact in ["=== Jal-Drishti", "Jal-Drishti AI Response", "==="]:
-            if ai_text.startswith(artifact):
-                ai_text = ai_text[len(artifact):].strip()
+        ai_text = response.choices[0].message.content.strip()
 
         if not ai_text:
             ai_text = FALLBACKS.get(lang, FALLBACKS["en"])
 
-        # Fix Unicode encoding issues
-        try:
-            return {"response": ai_text}
-        except UnicodeEncodeError:
-            # Fallback for encoding issues
-            safe_response = ai_text.encode('ascii', errors='ignore').decode('ascii')
-            return {"response": safe_response}
+        return {"response": ai_text}
 
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="Model is loading or busy. Please retry in a moment."
-        )
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+        err = str(e)
+        if "rate_limit" in err.lower():
+            raise HTTPException(status_code=429, detail="Groq rate limit reached. Please retry in a moment.")
+        if "authentication" in err.lower() or "api_key" in err.lower():
+            raise HTTPException(status_code=401, detail="Invalid Groq API key. Check your GROQ_API_KEY in .env")
+        raise HTTPException(status_code=500, detail=f"Chat error: {err}")
