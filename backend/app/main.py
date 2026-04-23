@@ -11,8 +11,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 
-# Load .env from project root
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+# Load .env from project root (for local dev — in production, env vars are set by the platform)
+_dotenv_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+if os.path.exists(_dotenv_path):
+    load_dotenv(_dotenv_path)
 
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY") or ""
@@ -22,11 +24,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
 GROQ_CLIENT = Groq(api_key=GROQ_API_KEY)
 GROQ_MODEL  = "llama-3.3-70b-versatile"   # Best free model for Hindi/Marathi/English
 
-print(f"DEBUG: SUPABASE_URL loaded: {bool(SUPABASE_URL)}")
-print(f"DEBUG: SUPABASE_KEY loaded: {bool(SUPABASE_KEY)}")
-print(f"DEBUG: GROQ_API_KEY loaded: {bool(GROQ_API_KEY)}")
-print(f"DEBUG: Using Groq Cloud AI — model: {GROQ_MODEL} (free!)")
-
 
 def _headers() -> dict[str, str]:
     return {
@@ -35,11 +32,17 @@ def _headers() -> dict[str, str]:
     }
 
 
-app = FastAPI(title="Jal-Drishti API")
+app = FastAPI(
+    title="Jal-Drishti API",
+    description="Groundwater monitoring and prediction API for Maharashtra",
+    version="1.0.0",
+)
 
+# CORS — allow the Vercel frontend and local dev
+_allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -409,7 +412,7 @@ def get_village_risk(village_name: str):
 
 @app.get("/api/village-risk")
 def get_all_village_risks(district: str = None, block: str = None):
-    params: dict[str, str] = {"select": "*", "model": "llama-2.5b", "order": "village"}
+    params: dict[str, str] = {"select": "*", "order": "village"}
     if district:
         params["district"] = f"eq.{district}"
     if block:

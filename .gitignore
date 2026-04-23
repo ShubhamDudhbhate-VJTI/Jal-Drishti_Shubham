@@ -31,8 +31,10 @@ backend/output/
 .env
 .env.*
 !.env.example
+!.env.production
 frontend/.env
 frontend/.env.*
+!frontend/.env.production
 
 # ─── Logs ────────────────────────────────────────────
 logs/
